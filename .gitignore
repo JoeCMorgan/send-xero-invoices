@@ -1,0 +1,9 @@
+venv
+.env
+cache/
+__pycache__/
+
+.DS_Store
+.vscode/*
+store_token.py
+invoice_mailer.log
