@@ -1,10 +1,11 @@
+#!/bin/sh
 import os
 from dotenv import load_dotenv, set_key, find_dotenv
 from functools import wraps
 import logging
 import json
 
-from xero_python.accounting import AccountingApi, Invoices, Invoice
+from xero_python.accounting import AccountingApi, Invoices, Invoice, CreditNote, CreditNotes
 from xero_python.api_client import ApiClient
 from xero_python.api_client.configuration import Configuration
 from xero_python.api_client.oauth2 import OAuth2Token
@@ -76,24 +77,6 @@ def refresh_token():
 
 
 @xero_token_required
-def get_invoices(api_instance):
-    try:
-        api_response = api_instance.get_invoices(
-            TENANT_ID,
-            where='SentToContact=Null or SentToContact=False'
-        )
-
-        logging.info(f"{len(api_response.invoices)} invoices retrieved")
-        print(api_response.invoices)
-
-    except AccountingBadRequestException as e:
-        print("Exception when calling AccountingApi->createAccount: %s\n" % e)
-        logging.error(f"Exception when calling AccountingApi->createAccount:\n {e}")
-
-    return api_response.invoices
-
-
-@xero_token_required
 def get_contact(api_instance, contact_id):
     try:
         api_reponse = api_instance.get_contact(TENANT_ID, contact_id)
@@ -103,6 +86,68 @@ def get_contact(api_instance, contact_id):
         logging.error(f"Exception when calling AccountingApi->getContact:\n {e}")
 
     return api_reponse.contacts[0]
+
+
+@xero_token_required
+def get_credit_notes(api_instance):
+    try:
+        api_response = api_instance.get_credit_notes(
+            TENANT_ID,
+            where='SentToContact=Null or SentToContact=False'
+        )
+
+        logging.info(f"{len(api_response.credit_notes)} credit notes retrieved")
+
+    except AccountingBadRequestException as e:
+        print("Exception when calling AccountingApi->getCreditNotes: %s\n" % e)
+        logging.error(f"Exception when calling AccountingApi->getCreditNotes:\n {e}")
+
+    return api_response.credit_notes
+
+
+@xero_token_required
+def get_credit_note_pdf(api_instance, credit_note_id):
+    try:
+        api_reponse = api_instance.get_credit_note_as_pdf(TENANT_ID, credit_note_id)
+        with open(api_reponse, 'rb') as f:
+            pdf = f.read()
+        os.remove(api_reponse)
+
+    except AccountingBadRequestException as e:
+        print("Exception when calling AccountingApi->getCreditNoteAsPdf: %s\n" % e)
+        logging.error(f"Exception when calling AccountingApi->getCreditNoteAsPdf:\n {e}")
+
+    return pdf
+
+
+@xero_token_required
+def mark_credit_note_sent(api_instance, credit_note):
+    try:
+        updated_credit_note = CreditNote(sent_to_contact=True)
+        credit_notes = CreditNotes(credit_notes=[updated_credit_note])
+
+        api_instance.update_credit_note(TENANT_ID, credit_note.credit_note_id, credit_notes)
+
+    except AccountingBadRequestException as e:
+        print("Exception when calling AccountingApi->updateCreditNotes: %s\n" % e)
+        logging.error(f"Exception when calling AccountingApi->updateCreditNotes:\n {e}")
+
+
+@xero_token_required
+def get_invoices(api_instance):
+    try:
+        api_response = api_instance.get_invoices(
+            TENANT_ID,
+            where='SentToContact=Null or SentToContact=False'
+        )
+
+        logging.info(f"{len(api_response.invoices)} invoices retrieved")
+
+    except AccountingBadRequestException as e:
+        print("Exception when calling AccountingApi->getInvoices: %s\n" % e)
+        logging.error(f"Exception when calling AccountingApi->getInvoices:\n {e}")
+
+    return api_response.invoices
 
 
 @xero_token_required
@@ -145,16 +190,18 @@ def mark_invoice_sent(api_instance, invoice):
         logging.error(f"Exception when calling AccountingApi->updateInvoice:\n {e}")
 
 
-def email_invoice(contact, pdf, invoice, invoice_url):
+def email_pdf(type, contact, inv_pdf, inv_number, inv_reference, inv_url):
     receiver_email = contact.email_address
-    subject = f"Your invoice for City Auto Paints order {invoice.reference}"
-    text = f"Dear {contact.name}, \n\n Thank you for shopping with City Auto Paints Ltd. A copy of your invoice for order {invoice.reference} is attached. If your invoice is not attached to this email, please contact us. Alternatively, view your invoice online at {invoice_url}."
+    subject = f"Your {type} for City Auto Paints order {inv_reference}"
+    text = f"Dear {contact.name}, \n\n Thank you for shopping with City Auto Paints Ltd. A copy of your {type} for order {inv_reference} is attached. If your {type} is not attached to this email, please contact us."
     html = f"""\
         <html>
           <body>
             <p>Dear {contact.name},<br><br>
-              Thank you for shopping with City Auto Paints Ltd. A copy of your invoice for order {invoice.reference} is attached. <br> <br>
-              If your invoice is not attached to this email, please contact us. Alternatively, <a href="{invoice_url}">view your invoice online</a>.
+              Thank you for shopping with City Auto Paints Ltd. A copy of your {type} for order
+              {inv_reference} is attached. <br> <br>
+              If your {type} is not attached to this email, please contact us.
+              {f'Alternatively, <a href="{inv_url}">view your {type} online</a>.' if inv_url else ''}
             </p>
           </body>
         </html>
@@ -177,7 +224,7 @@ def email_invoice(contact, pdf, invoice, invoice_url):
     message["Subject"] = subject
 
     pdf_part = MIMEBase("application", "octet-stream")
-    pdf_part.set_payload(pdf)
+    pdf_part.set_payload(inv_pdf)
 
     # Encode file in ASCII characters to send by email
     encoders.encode_base64(pdf_part)
@@ -185,7 +232,7 @@ def email_invoice(contact, pdf, invoice, invoice_url):
     # Add header as key/value pair to attachment part
     pdf_part.add_header(
         "Content-Disposition",
-        f"attachment; filename= {invoice.invoice_number}.pdf",
+        f"attachment; filename= {inv_number}.pdf",
     )
 
     # Add attachment to message and convert message to string
@@ -200,7 +247,7 @@ def email_invoice(contact, pdf, invoice, invoice_url):
         server.login(SMTP_SENDER_EMAIL, SMTP_PASSWORD)
         server.sendmail(SMTP_SENDER_EMAIL, receiver_email, message.as_string())
 
-        logging.info(f"Invoice {invoice.invoice_number} sent to {contact.name}")
+        logging.info(f"Invoice {inv_number} sent to {contact.name}")
     except Exception as e:
         logging.error(f"Exception when sending email:\n {e}")
     finally:
@@ -211,19 +258,33 @@ def main():
     refresh_token()
     api_instance = AccountingApi(api_client)
     invoices = get_invoices(api_instance)
-    mark_invoice_sent(api_instance, invoices[0])
+    credit_notes = get_credit_notes(api_instance)
 
     for invoice in invoices:
-        contact = get_contact(api_instance, invoice.contact.contact_id)
-        pdf = get_invoice_pdf(api_instance, invoice.invoice_id)
+        invoice_contact = get_contact(api_instance, invoice.contact.contact_id)
+        invoice_pdf = get_invoice_pdf(api_instance, invoice.invoice_id)
         invoice_url = get_invoice_url(api_instance, invoice.invoice_id)
-        
+
         try:
-            email_invoice(contact, pdf, invoice, invoice_url)
+            email_pdf('invoice', invoice_contact, invoice_pdf, invoice.invoice_number,
+                      invoice.reference, invoice_url)
         except Exception as e:
-            logging.error(f"Exception when sending email:\n {e}")
+            logging.error(f"Exception when sending invoice email:\n {e}")
         else:
             mark_invoice_sent(api_instance, invoice)
+
+    for credit_note in credit_notes:
+        credit_note_contact = get_contact(api_instance, credit_note.contact.contact_id)
+        credit_note_pdf = get_credit_note_pdf(api_instance, credit_note.credit_note_id)
+
+        try:
+            email_pdf('credit note', credit_note_contact, credit_note_pdf,
+                      credit_note.credit_note_number, credit_note.reference, "")
+        except Exception as e:
+            logging.error(f"Exception when sending credit note email:\n {e}")
+        # API current does not handle modifying paid credit notes
+        # else:
+        #     mark_credit_note_sent(api_instance, credit_note)
 
 
 if __name__ == "__main__":
