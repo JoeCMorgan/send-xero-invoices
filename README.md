@@ -13,7 +13,18 @@
 * Clone the repo `git clone https://github.com/JoeCMorgan/send-xero-invoices.git`
 * Install xero-python by running `pip install xero-python`
 * Install dotenv by running `pip install python-dotenv`
-* Create the `.env` file containing Xero and SMTP keys in the root `send-xero-invoices` folder
+* Create the `.env` file containing Xero and SMTP keys in the root `send-xero-invoices` folder:
+```
+XERO_TOKEN = ""
+CLIENT_ID = ""
+CLIENT_SECRET = ""
+TENANT_ID = ""
+
+SMTP_SERVER = ""
+SMTP_PORT = 
+SMTP_SENDER_EMAIL = ""
+SMTP_PASSWORD = ""
+```
 
 ### Set up the cron job
 * Run `crontab -e`
